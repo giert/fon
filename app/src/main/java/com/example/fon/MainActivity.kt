@@ -18,8 +18,19 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.example.fon.ui.theme.FonTheme
 import android.Manifest
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.BottomNavigation
+import androidx.compose.material.BottomNavigationItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.currentBackStackEntryAsState
 
 
 class MainActivity : ComponentActivity() {
@@ -42,7 +53,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ContactsListScreen()
+                    MainScreen()
                 }
             }
         }
@@ -56,13 +67,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
-    fun ContactsListScreen() {
-        val contacts by viewModel.contacts.observeAsState(emptyList())
+    fun MainScreen() {
+        val navController = rememberNavController()
+        val items = listOf(
+            AppScreens.Dialing,
+            AppScreens.CallHistory,
+            AppScreens.Contacts,
+            AppScreens.Messages,
+            AppScreens.Settings
+        )
 
-        LazyColumn {
-            items(contacts) { contact ->
-                ContactListItem(contact)
+        Scaffold(
+            bottomBar = {
+                BottomNavigation {
+                    val navBackStackEntry by navController.currentBackStackEntryAsState()
+                    val currentRoute = navBackStackEntry?.destination?.route
+
+                    items.forEach { screen ->
+                        BottomNavigationItem(
+                            icon = { /* Add your icon here */ },
+                            label = { Text(screen.title) },
+                            selected = currentRoute == screen.title,
+                            onClick = {
+                                navController.navigate(screen.title) {
+                                    navController.graph.startDestinationRoute?.let { popUpTo(it) }
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        ) { innerPadding ->
+            Box(modifier = Modifier.padding(innerPadding)) {
+                NavHost(navController, startDestination = AppScreens.Dialing.title) {
+                    composable(AppScreens.Dialing.title) { DialingScreen() }
+                    composable(AppScreens.CallHistory.title) { CallHistoryScreen() }
+                    composable(AppScreens.Contacts.title) { ContactsListScreen(viewModel) }
+                    composable(AppScreens.Messages.title) { MessagesScreen() }
+                    composable(AppScreens.Settings.title) { SettingsScreen() }
+                }
             }
         }
     }
