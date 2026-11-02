@@ -10,36 +10,26 @@ concurrency:
   cancel-in-progress: true
 jobs:
   tools:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Download official Gradle distribution
+      - name: Official build tools and synthetic dependency probe
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/offline/gradle" "$RUNNER_TEMP/offline/gradle-home" "$RUNNER_TEMP/probe/app/src/main/java/example/tools" "$RUNNER_TEMP/probe/app/src/test/java/example/tools"
-          cd "$RUNNER_TEMP/offline/gradle"
-          curl --fail --location --retry 3 https://services.gradle.org/distributions/gradle-9.4.1-bin.zip -o gradle.zip
-          echo '2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb  gradle.zip' | sha256sum --check
-          unzip -q gradle.zip
-          rm gradle.zip
-          echo "GRADLE_USER_HOME=$RUNNER_TEMP/offline/gradle-home" >> "$GITHUB_ENV"
-          echo "$RUNNER_TEMP/offline/gradle/gradle-9.4.1/bin" >> "$GITHUB_PATH"
-      - name: Install official Android SDK
-        shell: bash
-        run: |
-          set -euo pipefail
+          BASE="$RUNNER_TEMP/offline"
+          mkdir -p "$BASE/gradle" "$BASE/gradle-home" "$RUNNER_TEMP/probe/app/src/main/java/example/tools" "$RUNNER_TEMP/probe/app/src/test/java/example/tools"
+          cd "$BASE/gradle"
+          curl -fL --retry 3 https://services.gradle.org/distributions/gradle-9.4.1-bin.zip -o gradle.zip
+          echo '2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb  gradle.zip' | sha256sum -c
+          unzip -q gradle.zip && rm gradle.zip
+          export GRADLE_USER_HOME="$BASE/gradle-home"
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -1); fi
-          "$SDKMANAGER" 'platforms;android-37' 'build-tools;36.0.0'
-      - name: Resolve compiler, libraries, lint and test dependencies using a synthetic application
-        shell: bash
-        run: |
-          set -euo pipefail
+          "$SDKMANAGER" 'platforms;android-37.0' 'build-tools;36.0.0'
           cd "$RUNNER_TEMP/probe"
           cat > settings.gradle.kts <<'EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
@@ -47,14 +37,8 @@ jobs:
           rootProject.name = "OfflineDependencyProbe"
           include(":app")
           EOF
-          cat > build.gradle.kts <<'EOF'
-          plugins { id("com.android.application") version "9.2.0" apply false }
-          EOF
-          cat > gradle.properties <<'EOF'
-          android.useAndroidX=true
-          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
-          org.gradle.workers.max=2
-          EOF
+          echo 'plugins { id("com.android.application") version "9.2.0" apply false }' > build.gradle.kts
+          printf 'android.useAndroidX=true\norg.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8\norg.gradle.workers.max=2\n' > gradle.properties
           cat > app/build.gradle.kts <<'EOF'
           plugins { id("com.android.application") }
           android {
@@ -76,13 +60,8 @@ jobs:
             maxHeapSize = "1g"
           }
           EOF
-          cat > app/src/main/AndroidManifest.xml <<'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="Dependency probe" /></manifest>
-          EOF
-          cat > app/src/main/java/example/tools/Probe.kt <<'EOF'
-          package example.tools
-          object Probe { fun value() = 1 }
-          EOF
+          echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="Dependency probe" /></manifest>' > app/src/main/AndroidManifest.xml
+          printf 'package example.tools\nobject Probe { fun value() = 1 }\n' > app/src/main/java/example/tools/Probe.kt
           cat > app/src/test/java/example/tools/ProbeTest.kt <<'EOF'
           package example.tools
           import org.junit.Test
@@ -98,20 +77,20 @@ jobs:
             @Test @Config(sdk = [37]) fun api37() { assertEquals(1, Probe.value()) }
           }
           EOF
-          gradle --no-daemon --stacktrace :app:assembleRelease :app:assembleDebug :app:testDebugUnitTest :app:lintRelease
-      - name: Package only public build tools and library caches
+          "$BASE/gradle/gradle-9.4.1/bin/gradle" --no-daemon --stacktrace :app:assembleRelease :app:assembleDebug :app:testDebugUnitTest :app:lintRelease
+      - name: Package public tools only
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/export" "$RUNNER_TEMP/offline/android/platforms" "$RUNNER_TEMP/offline/android/build-tools" "$RUNNER_TEMP/offline/m2"
-          cp -a "$ANDROID_HOME/platforms/android-37" "$RUNNER_TEMP/offline/android/platforms/"
-          cp -a "$ANDROID_HOME/build-tools/36.0.0" "$RUNNER_TEMP/offline/android/build-tools/"
-          if [ -d "$ANDROID_HOME/build-tools/37.0.0" ]; then cp -a "$ANDROID_HOME/build-tools/37.0.0" "$RUNNER_TEMP/offline/android/build-tools/"; fi
-          cp -a "$ANDROID_HOME/licenses" "$RUNNER_TEMP/offline/android/"
-          if [ -d "$HOME/.m2/repository" ]; then cp -a "$HOME/.m2/repository" "$RUNNER_TEMP/offline/m2/"; fi
-          find "$RUNNER_TEMP/offline/gradle-home" -name '*.lock' -delete
-          rm -rf "$RUNNER_TEMP/offline/gradle-home/daemon"
-          tar -C "$RUNNER_TEMP/offline" -czf "$RUNNER_TEMP/export/toolchain.tar.gz" android gradle gradle-home m2
+          BASE="$RUNNER_TEMP/offline"
+          mkdir -p "$RUNNER_TEMP/export" "$BASE/android/platforms" "$BASE/android/build-tools" "$BASE/m2"
+          cp -a "$ANDROID_HOME/platforms/android-37.0" "$BASE/android/platforms/"
+          cp -a "$ANDROID_HOME/build-tools/36.0.0" "$BASE/android/build-tools/"
+          cp -a "$ANDROID_HOME/licenses" "$BASE/android/"
+          if [ -d "$HOME/.m2/repository" ]; then cp -a "$HOME/.m2/repository" "$BASE/m2/"; fi
+          find "$BASE/gradle-home" -name '*.lock' -delete
+          rm -rf "$BASE/gradle-home/daemon"
+          tar -C "$BASE" -czf "$RUNNER_TEMP/export/toolchain.tar.gz" android gradle gradle-home m2
           cd "$RUNNER_TEMP/export"
           sha256sum toolchain.tar.gz > archive.sha256
           split -b 200M toolchain.tar.gz tools.part
