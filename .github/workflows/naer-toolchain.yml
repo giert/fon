@@ -1,0 +1,143 @@
+name: Prepare Android tools for offline build
+on:
+  push:
+    branches: [build/naer-toolchain-20261103]
+    paths: [.github/workflows/naer-toolchain.yml]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Download official Gradle distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/offline/gradle" "$RUNNER_TEMP/offline/gradle-home" "$RUNNER_TEMP/probe/app/src/main/java/example/tools" "$RUNNER_TEMP/probe/app/src/test/java/example/tools"
+          cd "$RUNNER_TEMP/offline/gradle"
+          curl --fail --location --retry 3 https://services.gradle.org/distributions/gradle-9.4.1-bin.zip -o gradle.zip
+          echo '2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb  gradle.zip' | sha256sum --check
+          unzip -q gradle.zip
+          rm gradle.zip
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/offline/gradle-home" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/offline/gradle/gradle-9.4.1/bin" >> "$GITHUB_PATH"
+      - name: Install official Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-37' 'build-tools;36.0.0'
+      - name: Resolve compiler, libraries, lint and test dependencies using a synthetic application
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/probe"
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "OfflineDependencyProbe"
+          include(":app")
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") version "9.2.0" apply false }
+          EOF
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          org.gradle.workers.max=2
+          EOF
+          cat > app/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") }
+          android {
+            namespace = "example.tools"
+            compileSdk { version = release(37) { minorApiLevel = 0 } }
+            defaultConfig { applicationId = "example.tools"; minSdk = 31; targetSdk = 37; versionCode = 1; versionName = "1" }
+            compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+            testOptions { unitTests.isIncludeAndroidResources = true }
+            lint { abortOnError = false }
+          }
+          dependencies {
+            implementation("androidx.core:core:1.13.0")
+            implementation("androidx.recyclerview:recyclerview:1.4.0")
+            testImplementation("junit:junit:4.13.2")
+            testImplementation("org.robolectric:robolectric:4.17")
+          }
+          tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+            jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--add-opens=java.base/java.io=ALL-UNNAMED")
+            maxHeapSize = "1g"
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="Dependency probe" /></manifest>
+          EOF
+          cat > app/src/main/java/example/tools/Probe.kt <<'EOF'
+          package example.tools
+          object Probe { fun value() = 1 }
+          EOF
+          cat > app/src/test/java/example/tools/ProbeTest.kt <<'EOF'
+          package example.tools
+          import org.junit.Test
+          import org.junit.Assert.assertEquals
+          import org.junit.runner.RunWith
+          import org.robolectric.RobolectricTestRunner
+          import org.robolectric.annotation.Config
+          @RunWith(RobolectricTestRunner::class)
+          @Config(manifest = Config.NONE)
+          class ProbeTest {
+            @Test @Config(sdk = [31]) fun api31() { assertEquals(1, Probe.value()) }
+            @Test @Config(sdk = [36]) fun api36() { assertEquals(1, Probe.value()) }
+            @Test @Config(sdk = [37]) fun api37() { assertEquals(1, Probe.value()) }
+          }
+          EOF
+          gradle --no-daemon --stacktrace :app:assembleRelease :app:assembleDebug :app:testDebugUnitTest :app:lintRelease
+      - name: Package only public build tools and library caches
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/export" "$RUNNER_TEMP/offline/android" "$RUNNER_TEMP/offline/m2"
+          cp -a "$ANDROID_HOME/platforms" "$RUNNER_TEMP/offline/android/"
+          cp -a "$ANDROID_HOME/build-tools" "$RUNNER_TEMP/offline/android/"
+          cp -a "$ANDROID_HOME/licenses" "$RUNNER_TEMP/offline/android/"
+          if [ -d "$HOME/.m2/repository" ]; then cp -a "$HOME/.m2/repository" "$RUNNER_TEMP/offline/m2/"; fi
+          find "$RUNNER_TEMP/offline/gradle-home" -name '*.lock' -delete
+          rm -rf "$RUNNER_TEMP/offline/gradle-home/daemon"
+          tar -C "$RUNNER_TEMP/offline" -czf "$RUNNER_TEMP/export/android-tools.tar.gz" android gradle
+          tar -C "$RUNNER_TEMP/offline" -czf "$RUNNER_TEMP/export/gradle-cache.tar.gz" gradle-home
+          tar -C "$RUNNER_TEMP/offline" -czf "$RUNNER_TEMP/export/test-runtime.tar.gz" m2
+          cd "$RUNNER_TEMP/export"
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          du -h *.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-tools
+          path: ${{ runner.temp }}/export/android-tools.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gradle-cache
+          path: ${{ runner.temp }}/export/gradle-cache.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-runtime
+          path: ${{ runner.temp }}/export/test-runtime.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-probe-reports
+          path: |
+            ${{ runner.temp }}/export/SHA256SUMS.txt
+            ${{ runner.temp }}/probe/app/build/reports
+          retention-days: 1
