@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - name: Official build tools and synthetic dependency probe
         shell: bash
         run: |
@@ -69,16 +69,19 @@ jobs:
           import org.junit.runner.RunWith
           import org.robolectric.RobolectricTestRunner
           import org.robolectric.annotation.Config
+          import org.robolectric.annotation.GraphicsMode
           @RunWith(RobolectricTestRunner::class)
           @Config(manifest = Config.NONE)
+          @GraphicsMode(GraphicsMode.Mode.NATIVE)
           class ProbeTest {
             @Test @Config(sdk = [31]) fun api31() { assertEquals(1, Probe.value()) }
             @Test @Config(sdk = [36]) fun api36() { assertEquals(1, Probe.value()) }
             @Test @Config(sdk = [37]) fun api37() { assertEquals(1, Probe.value()) }
           }
           EOF
-          "$BASE/gradle/gradle-9.4.1/bin/gradle" --no-daemon --stacktrace :app:assembleRelease :app:assembleDebug :app:testDebugUnitTest :app:lintRelease
+          "$BASE/gradle/gradle-9.4.1/bin/gradle" --no-daemon --continue --stacktrace :app:assembleRelease :app:assembleDebug :app:testDebugUnitTest :app:lintRelease
       - name: Package public tools only
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -97,6 +100,7 @@ jobs:
           sha256sum tools.part* > parts.sha256
           ls -lh tools.part*
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-aa
           path: |
@@ -105,54 +109,63 @@ jobs:
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-ab
           path: ${{ runner.temp }}/export/tools.partab
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-ac
           path: ${{ runner.temp }}/export/tools.partac
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-ad
           path: ${{ runner.temp }}/export/tools.partad
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-ae
           path: ${{ runner.temp }}/export/tools.partae
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-af
           path: ${{ runner.temp }}/export/tools.partaf
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-ag
           path: ${{ runner.temp }}/export/tools.partag
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-ah
           path: ${{ runner.temp }}/export/tools.partah
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-ai
           path: ${{ runner.temp }}/export/tools.partai
           retention-days: 1
           compression-level: 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: toolchain-aj
           path: ${{ runner.temp }}/export/tools.partaj
